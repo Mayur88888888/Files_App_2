@@ -626,3 +626,17 @@ private fun PartitionAnalysisCard(
     }
 }
 
+private fun getFileIcon(file: FileItem): androidx.compose.ui.graphics.vector.ImageVector {
+    if (file.isDirectory) return Icons.Default.Folder
+    return when (file.category) {
+        FileCategory.IMAGES -> Icons.Default.Image
+        FileCategory.MUSIC -> Icons.Default.MusicNote
+        FileCategory.VIDEOS -> Icons.Default.Movie
+        FileCategory.DOCUMENTS -> Icons.Default.Description
+        FileCategory.APKS -> Icons.Default.Android
+        FileCategory.ARCHIVES -> Icons.Default.FolderZip
+        else -> Icons.Default.InsertDriveFile
+    }
+}
+
+

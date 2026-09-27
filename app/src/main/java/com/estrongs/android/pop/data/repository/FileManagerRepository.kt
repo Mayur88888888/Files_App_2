@@ -29,6 +29,10 @@ class FileManagerRepository(private val context: Context) {
         RootShellManager(context)
     }
 
+    val shizukuManager: ShizukuPrivilegeManager by lazy {
+        ShizukuPrivilegeManager(context)
+    }
+
     private val recycleBinDir: File by lazy {
         val dir = File(context.filesDir, ".es_recycle_bin")
         if (!dir.exists()) dir.mkdirs()
@@ -382,6 +386,17 @@ class FileManagerRepository(private val context: Context) {
                     createSampleZipArchive(sampleZip)
                 }
 
+                // Sample Audio Tracks in Music
+                val musicDir = File(target, "Music")
+                val sampleWav = File(musicDir, "ES_Demo_Melody.wav")
+                if (!sampleWav.exists()) {
+                    createSampleWavAudio(sampleWav, frequency = 440.0, durationSec = 8)
+                }
+                val sampleChime = File(musicDir, "ES_Notification_Chime.wav")
+                if (!sampleChime.exists()) {
+                    createSampleWavAudio(sampleChime, frequency = 880.0, durationSec = 4)
+                }
+
                 val sampleLog = File(downloadDir, "system_event.log")
                 if (!sampleLog.exists()) {
                     sampleLog.writeText(
@@ -410,6 +425,89 @@ class FileManagerRepository(private val context: Context) {
             zos.closeEntry()
 
             zos.close()
+        } catch (_: Exception) {}
+    }
+
+    private fun createSampleWavAudio(targetFile: File, frequency: Double = 440.0, durationSec: Int = 5) {
+        try {
+            val sampleRate = 22050
+            val numSamples = durationSec * sampleRate
+            val sample = DoubleArray(numSamples)
+            val generatedSnd = ByteArray(2 * numSamples)
+
+            for (i in 0 until numSamples) {
+                // Musical arpeggio effect
+                val noteFreq = frequency * when ((i / (sampleRate / 2)) % 4) {
+                    0 -> 1.0       // Root
+                    1 -> 1.2599    // Major 3rd
+                    2 -> 1.4983    // 5th
+                    else -> 2.0    // Octave
+                }
+                sample[i] = Math.sin(2.0 * Math.PI * i / (sampleRate / noteFreq))
+            }
+
+            var idx = 0
+            for (dVal in sample) {
+                val `val` = (dVal * 32767).toInt().toShort()
+                generatedSnd[idx++] = (`val`.toInt() and 0x00ff).toByte()
+                generatedSnd[idx++] = ((`val`.toInt() and 0xff00) ushr 8).toByte()
+            }
+
+            val totalDataLen = generatedSnd.size + 36
+            val totalAudioLen = generatedSnd.size
+            val byteRate = sampleRate * 2 * 1 // 16 bit mono
+
+            val header = ByteArray(44)
+            header[0] = 'R'.code.toByte() // RIFF/WAVE header
+            header[1] = 'I'.code.toByte()
+            header[2] = 'F'.code.toByte()
+            header[3] = 'F'.code.toByte()
+            header[4] = (totalDataLen and 0xff).toByte()
+            header[5] = ((totalDataLen shr 8) and 0xff).toByte()
+            header[6] = ((totalDataLen shr 16) and 0xff).toByte()
+            header[7] = ((totalDataLen shr 24) and 0xff).toByte()
+            header[8] = 'W'.code.toByte()
+            header[9] = 'A'.code.toByte()
+            header[10] = 'V'.code.toByte()
+            header[11] = 'E'.code.toByte()
+            header[12] = 'f'.code.toByte() // 'fmt ' chunk
+            header[13] = 'm'.code.toByte()
+            header[14] = 't'.code.toByte()
+            header[15] = ' '.code.toByte()
+            header[16] = 16 // 4 bytes: size of 'fmt ' chunk
+            header[17] = 0
+            header[18] = 0
+            header[19] = 0
+            header[20] = 1 // format = 1 (PCM)
+            header[21] = 0
+            header[22] = 1 // channels = 1 (mono)
+            header[23] = 0
+            header[24] = (sampleRate and 0xff).toByte()
+            header[25] = ((sampleRate shr 8) and 0xff).toByte()
+            header[26] = ((sampleRate shr 16) and 0xff).toByte()
+            header[27] = ((sampleRate shr 24) and 0xff).toByte()
+            header[28] = (byteRate and 0xff).toByte()
+            header[29] = ((byteRate shr 8) and 0xff).toByte()
+            header[30] = ((byteRate shr 16) and 0xff).toByte()
+            header[31] = ((byteRate shr 24) and 0xff).toByte()
+            header[32] = 2 // block align
+            header[33] = 0
+            header[34] = 16 // bits per sample
+            header[35] = 0
+            header[36] = 'd'.code.toByte()
+            header[37] = 'a'.code.toByte()
+            header[38] = 't'.code.toByte()
+            header[39] = 'a'.code.toByte()
+            header[40] = (totalAudioLen and 0xff).toByte()
+            header[41] = ((totalAudioLen shr 8) and 0xff).toByte()
+            header[42] = ((totalAudioLen shr 16) and 0xff).toByte()
+            header[43] = ((totalAudioLen shr 24) and 0xff).toByte()
+
+            val fos = FileOutputStream(targetFile)
+            fos.write(header)
+            fos.write(generatedSnd)
+            fos.flush()
+            fos.close()
         } catch (_: Exception) {}
     }
 
@@ -462,6 +560,14 @@ class FileManagerRepository(private val context: Context) {
                 isRootMode
 
         if (isSystemOrStoragePath || items.isEmpty()) {
+            // First try Shizuku & built-in privileged bypass engine
+            val shizukuFiles = shizukuManager.listRestrictedFiles(effectivePath, showHidden)
+            for (sf in shizukuFiles) {
+                if (items.none { it.name.equals(sf.name, ignoreCase = true) }) {
+                    items.add(sf)
+                }
+            }
+
             val elevated = rootShellManager.listProtectedDirectory(effectivePath)
             for (el in elevated) {
                 if (!showHidden && el.name.startsWith(".")) continue
@@ -1152,6 +1258,86 @@ class FileManagerRepository(private val context: Context) {
         } catch (_: Exception) {
             false
         }
+    }
+
+    suspend fun encryptFile(filePath: String, password: String, deleteOriginal: Boolean): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val sourceFile = File(filePath)
+            if (!sourceFile.exists() || sourceFile.isDirectory) return@withContext false
+
+            val outFile = File(sourceFile.parentFile, "${sourceFile.name}.eslock")
+            val keyBytes = java.security.MessageDigest.getInstance("SHA-256").digest(password.toByteArray(Charsets.UTF_8))
+            val secretKey = javax.crypto.spec.SecretKeySpec(keyBytes, "AES")
+            val iv = ByteArray(16) { 0x45 } // 'E' prefix IV
+            val ivSpec = javax.crypto.spec.IvParameterSpec(iv)
+
+            val cipher = javax.crypto.Cipher.getInstance("AES/CBC/PKCS5Padding")
+            cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, secretKey, ivSpec)
+
+            val inputBytes = sourceFile.readBytes()
+            val encryptedBytes = cipher.doFinal(inputBytes)
+
+            // Header: ESLOCK MAGIC + Length + Ciphertext
+            outFile.outputStream().use { out ->
+                out.write("ESLOCK_V1".toByteArray(Charsets.UTF_8))
+                out.write(encryptedBytes)
+            }
+
+            if (deleteOriginal) {
+                sourceFile.delete()
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    suspend fun decryptFile(eslockPath: String, password: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val lockFile = File(eslockPath)
+            if (!lockFile.exists()) return@withContext false
+
+            val bytes = lockFile.readBytes()
+            val magic = "ESLOCK_V1"
+            val magicBytes = magic.toByteArray(Charsets.UTF_8)
+            val headerOffset = magicBytes.size
+
+            val cipherBytes = bytes.copyOfRange(headerOffset, bytes.size)
+
+            val keyBytes = java.security.MessageDigest.getInstance("SHA-256").digest(password.toByteArray(Charsets.UTF_8))
+            val secretKey = javax.crypto.spec.SecretKeySpec(keyBytes, "AES")
+            val iv = ByteArray(16) { 0x45 }
+            val ivSpec = javax.crypto.spec.IvParameterSpec(iv)
+
+            val cipher = javax.crypto.Cipher.getInstance("AES/CBC/PKCS5Padding")
+            cipher.init(javax.crypto.Cipher.DECRYPT_MODE, secretKey, ivSpec)
+
+            val decryptedBytes = cipher.doFinal(cipherBytes)
+
+            val originalName = lockFile.name.removeSuffix(".eslock")
+            val restoredFile = File(lockFile.parentFile, originalName)
+            restoredFile.writeBytes(decryptedBytes)
+            lockFile.delete()
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    suspend fun batchRename(renameMap: Map<String, String>): Int = withContext(Dispatchers.IO) {
+        var count = 0
+        for ((oldPath, newName) in renameMap) {
+            try {
+                val f = File(oldPath)
+                if (f.exists()) {
+                    val dest = File(f.parentFile, newName)
+                    if (f.renameTo(dest)) {
+                        count++
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        count
     }
 
     fun calculateDirSize(dir: File): Long {

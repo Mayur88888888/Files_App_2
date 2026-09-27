@@ -64,6 +64,9 @@ data class ExplorerUiState(
     // Storage Permission Status
     val hasStoragePermission: Boolean = false,
 
+    // Shizuku & Built-in Privileged Engine State
+    val shizukuStatus: com.estrongs.android.pop.data.repository.ShizukuStatus = com.estrongs.android.pop.data.repository.ShizukuStatus(),
+
     // Root Explorer & Inner Android Filesystem State
     val isRootMode: Boolean = false,
     val isRootAvailable: Boolean = false,
@@ -79,6 +82,8 @@ data class ExplorerUiState(
     val editingFile: FileItem? = null,
     val editingContent: String = "",
     val viewingImage: FileItem? = null,
+    val folderImages: List<FileItem> = emptyList(),
+    val viewingVideo: FileItem? = null,
     val viewingZip: FileItem? = null,
     val zipEntries: List<String> = emptyList(),
     val propertiesItem: FileItem? = null,
@@ -87,6 +92,20 @@ data class ExplorerUiState(
     val renamingItem: FileItem? = null,
     val showZipDialog: Boolean = false,
     val filesToDelete: List<FileItem>? = null,
+
+    // Audio Player State
+    val audioState: com.estrongs.android.pop.ui.components.AudioPlayerState = com.estrongs.android.pop.ui.components.AudioPlayerState(),
+
+    // Batch Rename State
+    val showBatchRenameDialog: Boolean = false,
+    val batchRenameItems: List<FileItem> = emptyList(),
+
+    // Checksum & Hash Tool State
+    val checksumItem: FileItem? = null,
+
+    // Encryption & Decryption (.eslock) State
+    val encryptionItem: FileItem? = null,
+    val isDecryptMode: Boolean = false,
 
     // Terminal / Shell Tool State
     val showTerminalDialog: Boolean = false,
@@ -119,6 +138,9 @@ class ExplorerViewModel(application: Application) : AndroidViewModel(application
     private val _uiState = MutableStateFlow(ExplorerUiState())
     val uiState: StateFlow<ExplorerUiState> = _uiState.asStateFlow()
 
+    // MediaPlayer instance for ES Audio Player
+    private var mediaPlayer: android.media.MediaPlayer? = null
+
     init {
         val hasPerm = StoragePermissionHelper.hasAllFilesAccess(application)
         _uiState.update { it.copy(hasStoragePermission = hasPerm) }
@@ -127,7 +149,49 @@ class ExplorerViewModel(application: Application) : AndroidViewModel(application
             fileRepo.seedInitialFilesIfEmpty()
             loadStorageAndDashboard()
             checkRootAvailability()
+            checkShizukuStatus()
         }
+
+        // Coroutine to poll audio playback progress
+        viewModelScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(500)
+                try {
+                    mediaPlayer?.let { mp ->
+                        if (mp.isPlaying) {
+                            _uiState.update {
+                                it.copy(
+                                    audioState = it.audioState.copy(
+                                        currentPositionMs = mp.currentPosition,
+                                        totalDurationMs = mp.duration,
+                                        isPlaying = true
+                                    )
+                                )
+                            }
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        try {
+            mediaPlayer?.release()
+            mediaPlayer = null
+        } catch (_: Exception) {}
+    }
+
+    fun checkShizukuStatus() {
+        val status = fileRepo.shizukuManager.checkStatus()
+        _uiState.update { it.copy(shizukuStatus = status) }
+    }
+
+    fun requestShizukuPermission() {
+        fileRepo.shizukuManager.requestShizukuPermission()
+        checkShizukuStatus()
+        showSnackbar("Built-in Shizuku privilege active (UID: ${_uiState.value.shizukuStatus.uid})")
     }
 
     private fun checkRootAvailability() {
@@ -578,15 +642,24 @@ class ExplorerViewModel(application: Application) : AndroidViewModel(application
             return
         }
 
+        if (item.name.endsWith(".eslock")) {
+            openDecrypt(item)
+            return
+        }
+
         when (item.category) {
-            FileCategory.DOCUMENTS -> {
-                viewModelScope.launch {
-                    val content = fileRepo.readText(item.path, _uiState.value.isRootMode)
-                    _uiState.update { it.copy(editingFile = item, editingContent = content) }
-                }
+            FileCategory.MUSIC -> {
+                val currentFolderAudios = _uiState.value.files.filter { it.category == FileCategory.MUSIC }
+                val playlist = if (currentFolderAudios.isNotEmpty()) currentFolderAudios else listOf(item)
+                playAudio(item, playlist, expand = true)
+            }
+            FileCategory.VIDEOS -> {
+                _uiState.update { it.copy(viewingVideo = item) }
             }
             FileCategory.IMAGES -> {
-                _uiState.update { it.copy(viewingImage = item) }
+                val currentFolderImages = _uiState.value.files.filter { it.category == FileCategory.IMAGES }
+                val imagesList = if (currentFolderImages.isNotEmpty()) currentFolderImages else listOf(item)
+                _uiState.update { it.copy(viewingImage = item, folderImages = imagesList) }
             }
             FileCategory.ARCHIVES -> {
                 viewModelScope.launch {
@@ -594,8 +667,14 @@ class ExplorerViewModel(application: Application) : AndroidViewModel(application
                     _uiState.update { it.copy(viewingZip = item, zipEntries = entries) }
                 }
             }
+            FileCategory.DOCUMENTS -> {
+                viewModelScope.launch {
+                    val content = fileRepo.readText(item.path, _uiState.value.isRootMode)
+                    _uiState.update { it.copy(editingFile = item, editingContent = content) }
+                }
+            }
             else -> {
-                // Try text editor as generic viewer
+                // Default to ES Note Editor for config, logs, scripts, etc.
                 viewModelScope.launch {
                     val content = fileRepo.readText(item.path, _uiState.value.isRootMode)
                     _uiState.update { it.copy(editingFile = item, editingContent = content) }
@@ -604,15 +683,207 @@ class ExplorerViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    // ES Audio Player Methods
+    fun playAudio(track: FileItem, playlist: List<FileItem>, expand: Boolean = false) {
+        viewModelScope.launch {
+            try {
+                mediaPlayer?.stop()
+                mediaPlayer?.release()
+                mediaPlayer = null
+
+                val mp = android.media.MediaPlayer().apply {
+                    setDataSource(track.path)
+                    prepare()
+                    start()
+                    setOnCompletionListener {
+                        handleAudioCompletion()
+                    }
+                }
+                mediaPlayer = mp
+
+                _uiState.update {
+                    it.copy(
+                        audioState = it.audioState.copy(
+                            currentTrack = track,
+                            playlist = playlist,
+                            isPlaying = true,
+                            currentPositionMs = 0,
+                            totalDurationMs = mp.duration,
+                            isExpanded = expand || it.audioState.isExpanded
+                        )
+                    )
+                }
+            } catch (e: Exception) {
+                showSnackbar("Error playing audio: ${e.localizedMessage}")
+            }
+        }
+    }
+
+    private fun handleAudioCompletion() {
+        val st = _uiState.value.audioState
+        val list = st.playlist
+        val curr = st.currentTrack
+        if (list.isEmpty() || curr == null) return
+
+        when (st.loopMode) {
+            com.estrongs.android.pop.ui.components.LoopMode.REPEAT_ONE -> {
+                playAudio(curr, list, expand = false)
+            }
+            com.estrongs.android.pop.ui.components.LoopMode.SHUFFLE -> {
+                val next = list.random()
+                playAudio(next, list, expand = false)
+            }
+            com.estrongs.android.pop.ui.components.LoopMode.REPEAT_ALL -> {
+                val idx = list.indexOfFirst { it.path == curr.path }
+                val nextIdx = (idx + 1) % list.size
+                playAudio(list[nextIdx], list, expand = false)
+            }
+            com.estrongs.android.pop.ui.components.LoopMode.SEQUENTIAL -> {
+                val idx = list.indexOfFirst { it.path == curr.path }
+                if (idx < list.size - 1) {
+                    playAudio(list[idx + 1], list, expand = false)
+                } else {
+                    _uiState.update { it.copy(audioState = it.audioState.copy(isPlaying = false)) }
+                }
+            }
+        }
+    }
+
+    fun toggleAudioPlayPause() {
+        val mp = mediaPlayer ?: return
+        if (mp.isPlaying) {
+            mp.pause()
+            _uiState.update { it.copy(audioState = it.audioState.copy(isPlaying = false)) }
+        } else {
+            mp.start()
+            _uiState.update { it.copy(audioState = it.audioState.copy(isPlaying = true)) }
+        }
+    }
+
+    fun seekAudioTo(targetMs: Int) {
+        mediaPlayer?.seekTo(targetMs)
+        _uiState.update { it.copy(audioState = it.audioState.copy(currentPositionMs = targetMs)) }
+    }
+
+    fun nextAudioTrack() {
+        val st = _uiState.value.audioState
+        val list = st.playlist
+        val curr = st.currentTrack
+        if (list.isEmpty() || curr == null) return
+
+        val nextTrack = if (st.loopMode == com.estrongs.android.pop.ui.components.LoopMode.SHUFFLE) {
+            list.random()
+        } else {
+            val idx = list.indexOfFirst { it.path == curr.path }
+            val nextIdx = (idx + 1) % list.size
+            list[nextIdx]
+        }
+        playAudio(nextTrack, list, expand = false)
+    }
+
+    fun previousAudioTrack() {
+        val st = _uiState.value.audioState
+        val list = st.playlist
+        val curr = st.currentTrack
+        if (list.isEmpty() || curr == null) return
+
+        val idx = list.indexOfFirst { it.path == curr.path }
+        val prevIdx = if (idx <= 0) list.size - 1 else idx - 1
+        playAudio(list[prevIdx], list, expand = false)
+    }
+
+    fun toggleAudioLoopMode() {
+        val modes = com.estrongs.android.pop.ui.components.LoopMode.values()
+        val currentIdx = modes.indexOf(_uiState.value.audioState.loopMode)
+        val nextMode = modes[(currentIdx + 1) % modes.size]
+        _uiState.update { it.copy(audioState = it.audioState.copy(loopMode = nextMode)) }
+    }
+
+    fun expandAudioPlayer() {
+        _uiState.update { it.copy(audioState = it.audioState.copy(isExpanded = true)) }
+    }
+
+    fun collapseAudioPlayer() {
+        _uiState.update { it.copy(audioState = it.audioState.copy(isExpanded = false)) }
+    }
+
+    fun closeAudioPlayer() {
+        try {
+            mediaPlayer?.stop()
+            mediaPlayer?.release()
+            mediaPlayer = null
+        } catch (_: Exception) {}
+        _uiState.update { it.copy(audioState = com.estrongs.android.pop.ui.components.AudioPlayerState()) }
+    }
+
+    // Video Player
+    fun closeVideoPlayer() {
+        _uiState.update { it.copy(viewingVideo = null) }
+    }
+
+    // Image Viewer
+    fun openImageViewer(file: FileItem) {
+        val list = _uiState.value.files.filter { it.category == FileCategory.IMAGES }
+        _uiState.update { it.copy(viewingImage = file, folderImages = if (list.isNotEmpty()) list else listOf(file)) }
+    }
+
+    fun closeImageViewer() {
+        _uiState.update { it.copy(viewingImage = null, folderImages = emptyList()) }
+    }
+
+    fun navigateImageViewer(target: FileItem) {
+        _uiState.update { it.copy(viewingImage = target) }
+    }
+
+    fun deleteImageFromViewer(file: FileItem) {
+        viewModelScope.launch {
+            fileRepo.delete(file.path, moveToRecycleBin = false, isRootMode = _uiState.value.isRootMode)
+            showSnackbar("Image deleted")
+            refreshFiles()
+            closeImageViewer()
+        }
+    }
+
+    // ES Note Editor Actions
+    fun openNewBlankNote() {
+        val tempFile = FileItem(
+            name = "New_Note.txt",
+            path = File(_uiState.value.currentPath, "New_Note.txt").absolutePath,
+            isDirectory = false,
+            category = FileCategory.DOCUMENTS
+        )
+        _uiState.update {
+            it.copy(
+                editingFile = tempFile,
+                editingContent = "# ES Note Editor\n\nEnter your notes, scripts, or configurations here...\n"
+            )
+        }
+    }
+
     fun saveEditedFile(newContent: String) {
         val file = _uiState.value.editingFile ?: return
         viewModelScope.launch {
             val ok = fileRepo.writeText(file.path, newContent, _uiState.value.isRootMode)
             if (ok) {
-                showSnackbar("File saved successfully")
+                showSnackbar("File saved successfully: ${file.name}")
                 refreshFiles()
             } else {
-                showSnackbar("Failed to save file (Check RW permissions)")
+                showSnackbar("Failed to save file (Check write permissions)")
+            }
+            _uiState.update { it.copy(editingFile = null, editingContent = "") }
+        }
+    }
+
+    fun saveEditedFileAs(newName: String, content: String) {
+        val dir = _uiState.value.currentPath
+        val targetPath = File(dir, newName).absolutePath
+        viewModelScope.launch {
+            val ok = fileRepo.writeText(targetPath, content, _uiState.value.isRootMode)
+            if (ok) {
+                showSnackbar("Document saved as $newName")
+                refreshFiles()
+            } else {
+                showSnackbar("Failed to save document")
             }
             _uiState.update { it.copy(editingFile = null, editingContent = "") }
         }
@@ -622,8 +893,82 @@ class ExplorerViewModel(application: Application) : AndroidViewModel(application
         _uiState.update { it.copy(editingFile = null, editingContent = "") }
     }
 
-    fun closeImageViewer() {
-        _uiState.update { it.copy(viewingImage = null) }
+    // Batch Rename Tool
+    fun openBatchRename(selectedItems: List<FileItem>) {
+        if (selectedItems.isEmpty()) return
+        _uiState.update { it.copy(showBatchRenameDialog = true, batchRenameItems = selectedItems) }
+    }
+
+    fun dismissBatchRename() {
+        _uiState.update { it.copy(showBatchRenameDialog = false, batchRenameItems = emptyList()) }
+    }
+
+    fun confirmBatchRename(renameMap: Map<FileItem, String>) {
+        viewModelScope.launch {
+            val pathMap = renameMap.mapKeys { it.key.path }
+            val renamedCount = fileRepo.batchRename(pathMap)
+            showSnackbar("Renamed $renamedCount item(s) successfully")
+            _uiState.update {
+                it.copy(
+                    showBatchRenameDialog = false,
+                    batchRenameItems = emptyList(),
+                    isSelectionMode = false,
+                    selectedFilePaths = emptySet()
+                )
+            }
+            refreshFiles()
+            loadStorageAndDashboard()
+        }
+    }
+
+    // Checksum & Hash Tool
+    fun openChecksum(item: FileItem) {
+        _uiState.update { it.copy(checksumItem = item) }
+    }
+
+    fun dismissChecksum() {
+        _uiState.update { it.copy(checksumItem = null) }
+    }
+
+    // Encryption & Decryption Tool
+    fun openEncrypt(item: FileItem) {
+        _uiState.update { it.copy(encryptionItem = item, isDecryptMode = false) }
+    }
+
+    fun openDecrypt(item: FileItem) {
+        _uiState.update { it.copy(encryptionItem = item, isDecryptMode = true) }
+    }
+
+    fun dismissEncryption() {
+        _uiState.update { it.copy(encryptionItem = null) }
+    }
+
+    fun confirmEncrypt(password: String, deleteOriginal: Boolean) {
+        val item = _uiState.value.encryptionItem ?: return
+        viewModelScope.launch {
+            val ok = fileRepo.encryptFile(item.path, password, deleteOriginal)
+            if (ok) {
+                showSnackbar("File encrypted to ${item.name}.eslock")
+                refreshFiles()
+            } else {
+                showSnackbar("Failed to encrypt file")
+            }
+            dismissEncryption()
+        }
+    }
+
+    fun confirmDecrypt(password: String) {
+        val item = _uiState.value.encryptionItem ?: return
+        viewModelScope.launch {
+            val ok = fileRepo.decryptFile(item.path, password)
+            if (ok) {
+                showSnackbar("Vault unlocked & decrypted successfully!")
+                refreshFiles()
+            } else {
+                showSnackbar("Decryption failed. Incorrect password.")
+            }
+            dismissEncryption()
+        }
     }
 
     fun closeZipViewer() {
