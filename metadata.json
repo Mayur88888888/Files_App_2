@@ -1,0 +1,6 @@
+{
+  "name": "ES File Explorer",
+  "description": "Full-featured file manager and storage explorer for Android with internal storage, SD card, categories, cleanup, app manager, and archive support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
