@@ -23,6 +23,11 @@ data class ShizukuStatus(
 class ShizukuPrivilegeManager(private val context: Context) {
 
     private val binderReceivedListener = Shizuku.OnBinderReceivedListener {
+        try {
+            if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+                Shizuku.requestPermission(1000)
+            }
+        } catch (_: Throwable) {}
         checkStatus()
     }
 

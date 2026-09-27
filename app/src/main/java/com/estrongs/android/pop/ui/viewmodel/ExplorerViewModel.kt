@@ -293,15 +293,15 @@ class ExplorerViewModel(application: Application) : AndroidViewModel(application
     fun navigateUp() {
         val current = _uiState.value.currentPath
         if (current == "/" || current.isEmpty()) {
-            showSnackbar("Already at root directory")
+            navigateTo(Screen.HOME)
             return
         }
         val currentFile = File(current)
         val parent = currentFile.parentFile
-        if (parent != null) {
+        if (parent != null && parent.absolutePath != current) {
             openDirectory(parent.absolutePath)
         } else {
-            openDirectory("/")
+            navigateTo(Screen.HOME)
         }
     }
 

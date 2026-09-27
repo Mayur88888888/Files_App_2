@@ -24,6 +24,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
 import com.estrongs.android.pop.data.model.FileCategory
 import com.estrongs.android.pop.data.model.FileItem
 import com.estrongs.android.pop.data.model.StorageInfo
@@ -471,6 +473,16 @@ private fun SimplifiedRecentFileCard(
     onClick: () -> Unit
 ) {
     val fileColor = getCategoryColor(file.category)
+    val isPreviewable = !file.isDirectory && (
+        file.category == FileCategory.IMAGES ||
+        file.category == FileCategory.VIDEOS ||
+        file.name.endsWith(".png", true) ||
+        file.name.endsWith(".jpg", true) ||
+        file.name.endsWith(".jpeg", true) ||
+        file.name.endsWith(".webp", true) ||
+        file.name.endsWith(".gif", true) ||
+        file.name.endsWith(".mp4", true)
+    )
 
     Card(
         modifier = Modifier
@@ -485,17 +497,27 @@ private fun SimplifiedRecentFileCard(
         Column(modifier = Modifier.padding(10.dp)) {
             Box(
                 modifier = Modifier
-                    .size(36.dp)
+                    .fillMaxWidth()
+                    .height(60.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .background(fileColor.copy(alpha = 0.15f)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    getCategoryIcon(file.category),
-                    contentDescription = null,
-                    tint = fileColor,
-                    modifier = Modifier.size(22.dp)
-                )
+                if (isPreviewable && java.io.File(file.path).exists()) {
+                    AsyncImage(
+                        model = java.io.File(file.path),
+                        contentDescription = file.name,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Icon(
+                        getCategoryIcon(file.category),
+                        contentDescription = null,
+                        tint = fileColor,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
             }
             Spacer(modifier = Modifier.height(8.dp))
             Text(

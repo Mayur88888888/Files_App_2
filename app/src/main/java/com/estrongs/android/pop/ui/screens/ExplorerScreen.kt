@@ -30,6 +30,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
 import com.estrongs.android.pop.data.model.FileCategory
 import com.estrongs.android.pop.data.model.FileItem
 import com.estrongs.android.pop.ui.theme.*
@@ -55,6 +57,7 @@ fun ExplorerScreen(
     onRequestPermission: () -> Unit = {},
     onNavigateToPath: (String) -> Unit,
     onNavigateUp: () -> Unit,
+    onGoHome: () -> Unit = {},
     onOpenFile: (FileItem) -> Unit,
     onToggleSelectFile: (String) -> Unit,
     onSelectAll: () -> Unit,
@@ -101,6 +104,7 @@ fun ExplorerScreen(
                 searchQuery = searchQuery,
                 onNavigateToPath = onNavigateToPath,
                 onNavigateUp = onNavigateUp,
+                onGoHome = onGoHome,
                 onToggleSearch = {
                     isSearchExpanded = !isSearchExpanded
                     if (!isSearchExpanded) onSearchQueryChange("")
@@ -262,6 +266,7 @@ private fun CleanAddressBar(
     searchQuery: String,
     onNavigateToPath: (String) -> Unit,
     onNavigateUp: () -> Unit,
+    onGoHome: () -> Unit = {},
     onToggleSearch: () -> Unit,
     onSearchQueryChange: (String) -> Unit
 ) {
@@ -277,6 +282,10 @@ private fun CleanAddressBar(
                     .padding(horizontal = 8.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                IconButton(onClick = onGoHome, modifier = Modifier.testTag("nav_home_button")) {
+                    Icon(Icons.Default.Home, contentDescription = "Instant Home", tint = Color.White)
+                }
+
                 IconButton(onClick = onNavigateUp, modifier = Modifier.testTag("nav_up_button")) {
                     Icon(Icons.Default.ArrowBack, contentDescription = "Up Directory", tint = Color.White)
                 }
@@ -556,14 +565,35 @@ private fun CleanFileListRow(
                 Spacer(modifier = Modifier.width(8.dp))
             }
 
+            val isPreviewable = !item.isDirectory && (
+                item.category == FileCategory.IMAGES ||
+                item.category == FileCategory.VIDEOS ||
+                item.name.endsWith(".png", true) ||
+                item.name.endsWith(".jpg", true) ||
+                item.name.endsWith(".jpeg", true) ||
+                item.name.endsWith(".webp", true) ||
+                item.name.endsWith(".gif", true) ||
+                item.name.endsWith(".mp4", true) ||
+                item.name.endsWith(".mkv", true)
+            )
+
             Box(
                 modifier = Modifier
-                    .size(38.dp)
-                    .clip(CircleShape)
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(8.dp))
                     .background(fileColor.copy(alpha = 0.12f)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(getFileIconClean(item), contentDescription = null, tint = fileColor, modifier = Modifier.size(22.dp))
+                if (isPreviewable && java.io.File(item.path).exists()) {
+                    AsyncImage(
+                        model = java.io.File(item.path),
+                        contentDescription = item.name,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Icon(getFileIconClean(item), contentDescription = null, tint = fileColor, modifier = Modifier.size(22.dp))
+                }
             }
 
             Spacer(modifier = Modifier.width(10.dp))
@@ -639,14 +669,35 @@ private fun CleanFileGridCard(
             modifier = Modifier.padding(10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            val isPreviewable = !item.isDirectory && (
+                item.category == FileCategory.IMAGES ||
+                item.category == FileCategory.VIDEOS ||
+                item.name.endsWith(".png", true) ||
+                item.name.endsWith(".jpg", true) ||
+                item.name.endsWith(".jpeg", true) ||
+                item.name.endsWith(".webp", true) ||
+                item.name.endsWith(".gif", true) ||
+                item.name.endsWith(".mp4", true) ||
+                item.name.endsWith(".mkv", true)
+            )
+
             Box(
                 modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
+                    .size(64.dp)
+                    .clip(RoundedCornerShape(10.dp))
                     .background(fileColor.copy(alpha = 0.12f)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(getFileIconClean(item), contentDescription = item.name, tint = fileColor, modifier = Modifier.size(26.dp))
+                if (isPreviewable && java.io.File(item.path).exists()) {
+                    AsyncImage(
+                        model = java.io.File(item.path),
+                        contentDescription = item.name,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Icon(getFileIconClean(item), contentDescription = item.name, tint = fileColor, modifier = Modifier.size(32.dp))
+                }
             }
             Spacer(modifier = Modifier.height(6.dp))
             Text(

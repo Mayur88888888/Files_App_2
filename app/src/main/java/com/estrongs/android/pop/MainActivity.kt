@@ -270,6 +270,7 @@ fun ESFileExplorerApp(
                                 onRequestPermission = requestStoragePermissions,
                                 onNavigateToPath = { path -> viewModel.openDirectory(path) },
                                 onNavigateUp = { viewModel.navigateUp() },
+                                onGoHome = { viewModel.navigateTo(Screen.HOME) },
                                 onOpenFile = { file -> viewModel.openFile(file) },
                                 onToggleSelectFile = { path -> viewModel.toggleSelectFile(path) },
                                 onSelectAll = { viewModel.selectAllFiles() },
